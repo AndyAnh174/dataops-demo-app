@@ -22,7 +22,7 @@ concurrency:
 jobs:
   test-build-deploy:
     runs-on: [self-hosted, linux, x64, dataops-demo]
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       DATAOPS_URL: http://127.0.0.1:18080
       IMAGE_PREFIX: ghcr.io/andyanh174/dataops-demo
@@ -34,11 +34,21 @@ jobs:
       - name: Report pipeline start to DataOps
         run: ./scripts/report-dataops.sh RUNNING pipeline.started
 
-      - name: Test FastAPI image
-        run: docker build --target test --tag dataops-demo-api:test ./backend
+      - name: Test FastAPI
+        working-directory: backend
+        run: |
+          uv sync --frozen --group dev
+          uv run pytest -q
+          uv run ruff check .
+          uv run ruff format --check .
 
-      - name: Test Next.js image
-        run: docker build --target test --tag dataops-demo-web:test ./frontend
+      - name: Test and build Next.js
+        working-directory: frontend
+        run: |
+          export PATH="/opt/actions-runner/externals/node24/bin:${PATH}"
+          npm ci --no-audit --no-fund
+          npm test
+          npm run build
 
       - name: Simulate a controlled failure
         if: ${{ inputs.simulate_failure == true }}
@@ -49,14 +59,16 @@ jobs:
       - name: Build immutable release images
         run: |
           docker build --target runtime --tag "${IMAGE_PREFIX}-api:sha-${GITHUB_SHA}" ./backend
-          docker build --target runtime --tag "${IMAGE_PREFIX}-web:sha-${GITHUB_SHA}" ./frontend
+          docker build --target prebuilt-runtime --tag "${IMAGE_PREFIX}-web:sha-${GITHUB_SHA}" ./frontend
 
       - name: Scan release images for critical vulnerabilities
         run: |
           docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume /opt/dataops-demo/trivy-cache:/root/.cache/trivy \
             aquasec/trivy:0.74.0 image --exit-code 1 --severity CRITICAL --ignore-unfixed \
             "${IMAGE_PREFIX}-api:sha-${GITHUB_SHA}"
           docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume /opt/dataops-demo/trivy-cache:/root/.cache/trivy \
             aquasec/trivy:0.74.0 image --exit-code 1 --severity CRITICAL --ignore-unfixed \
             "${IMAGE_PREFIX}-web:sha-${GITHUB_SHA}"
 
