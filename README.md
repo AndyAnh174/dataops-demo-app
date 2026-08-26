@@ -13,15 +13,19 @@
 ```text
 git push
   -> self-hosted runner nhận job
-  -> gửi RUNNING event vào DataOps
-  -> test FastAPI + Next.js
-  -> build và scan Docker images
-  -> publish image theo commit SHA
-  -> deploy + health check + rollback nếu lỗi
-  -> gửi SUCCESS / FAILED / CANCELED event vào DataOps
+  -> DataOps Agent đọc dataops.yaml và gửi RUNNING event
+  -> agent chạy test FastAPI + Next.js
+  -> agent build, scan và publish Docker images theo commit SHA
+  -> agent deploy + health check + rollback nếu lỗi
+  -> agent gửi log từng stage và trạng thái SUCCESS / FAILED về Control Plane
 ```
 
 DataOps Control Plane hiện chứng minh phần **chuẩn hóa và lưu trạng thái pipeline đa provider**, idempotency event và audit theo run. AI Agent/RCA/auto-recovery chưa được triển khai ở giai đoạn này; workflow không giả vờ rằng phần đó đã tồn tại.
+
+Workflow chỉ cần checkout rồi gọi
+[`AndyAnh174/dataops-agent@v0`](https://github.com/AndyAnh174/dataops-agent). Toàn bộ
+pipeline portable nằm trong [`dataops.yaml`](dataops.yaml); `DATAOPS_TOKEN` được lưu bằng
+GitHub Actions secret.
 
 ## Chạy local
 
