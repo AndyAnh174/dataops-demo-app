@@ -1,0 +1,26 @@
+[project]
+name = "dataops-demo-pipeline"
+version = "0.1.0"
+description = "Pandas and Great Expectations data-quality pipeline for the DataOps M3 demo"
+requires-python = ">=3.12"
+dependencies = [
+  "great-expectations==1.21.0",
+  "pandas>=2.3,<3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "ruff==0.16.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

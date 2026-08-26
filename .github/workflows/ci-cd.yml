@@ -5,11 +5,18 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      simulate_failure:
-        description: Emit a controlled failed run for the DataOps demo
+      fault_scenario:
+        description: Data-quality condition to inject into the Pandas dataset
         required: true
-        type: boolean
-        default: false
+        type: choice
+        default: none
+        options:
+          - none
+          - schema_drift
+          - null_rate
+          - duplicate
+          - range
+          - volume
 
 permissions:
   contents: read
@@ -35,6 +42,6 @@ jobs:
         uses: AndyAnh174/dataops-agent@v0
         env:
           DATAOPS_TOKEN: ${{ secrets.DATAOPS_TOKEN }}
-          DATAOPS_SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
+          DATAOPS_FAULT_SCENARIO: ${{ inputs.fault_scenario || 'none' }}
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

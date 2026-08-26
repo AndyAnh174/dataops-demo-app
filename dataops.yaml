@@ -1,7 +1,21 @@
 version: 1
 
+reports:
+  data_quality: artifacts/data-quality-report.json
+
 pipeline:
   stages:
+    - name: data-quality
+      working_directory: data_pipeline
+      run: |
+        uv sync --frozen --group dev
+        uv run pytest -q
+        uv run ruff check .
+        uv run ruff format --check .
+        uv run python -m dataops_demo_pipeline \
+          --scenario "${DATAOPS_FAULT_SCENARIO:-none}" \
+          --output ../artifacts/data-quality-report.json
+
     - name: backend-quality
       working_directory: backend
       run: |
@@ -17,14 +31,6 @@ pipeline:
         npm ci --no-audit --no-fund
         npm test
         npm run build
-
-    - name: simulate-failure
-      run: |
-        if [ "${DATAOPS_SIMULATE_FAILURE:-false}" = "true" ]; then
-          echo "Intentional demo failure requested."
-          exit 42
-        fi
-        echo "Controlled failure is disabled."
 
     - name: build-images
       run: |
