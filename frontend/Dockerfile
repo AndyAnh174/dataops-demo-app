@@ -19,7 +19,9 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0
 
 WORKDIR /app
-RUN addgroup --system --gid 10001 app \
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+    && addgroup --system --gid 10001 app \
     && adduser --system --uid 10001 --ingroup app app
 
 USER 10001:10001
