@@ -24,6 +24,10 @@ RUN uv sync --frozen --no-dev \
     && addgroup --system --gid 10001 app \
     && adduser --system --uid 10001 --gid 10001 --home /app app
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends --only-upgrade libgnutls30 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --chown=10001:10001 app ./app
 
 USER 10001:10001
