@@ -2,14 +2,20 @@ name: dataops-control-plane-demo
 
 services:
   api:
-    image: ghcr.io/andyanh174/dataops-control-plane:sha-72009b6b989fd2ffb15dc947ddc79c95df5058f2
+    image: ghcr.io/andyanh174/dataops-control-plane@sha256:bb8f3bcaadb2173337b9d6fa753a49d221514c04c30a95e83c82b519b217fedb
     environment:
       DATAOPS_DATABASE_URL: postgresql+psycopg://dataops:${DATAOPS_POSTGRES_PASSWORD:?set DATAOPS_POSTGRES_PASSWORD}@postgres:5432/dataops
+      DATAOPS_AGENT_TOKEN: ${DATAOPS_AGENT_TOKEN:?set DATAOPS_AGENT_TOKEN}
+      DATAOPS_ELASTICSEARCH_URL: http://elasticsearch:9200
+      DATAOPS_ELASTICSEARCH_LOG_RETENTION: 30d
     ports:
       - "127.0.0.1:18080:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    mem_limit: 512m
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
@@ -26,6 +32,7 @@ services:
       POSTGRES_PASSWORD: ${DATAOPS_POSTGRES_PASSWORD:?set DATAOPS_POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    mem_limit: 1024m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dataops -d dataops"]
       interval: 5s
@@ -33,5 +40,48 @@ services:
       retries: 10
     restart: unless-stopped
 
+  elasticsearch:
+    image: elasticsearch:9.4.4
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms768m -Xmx768m
+    ports:
+      - "127.0.0.1:9201:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    mem_limit: 1536m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s' > /dev/null
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  kibana:
+    image: kibana:9.4.4
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${DATAOPS_KIBANA_ENCRYPTION_KEY:?set DATAOPS_KIBANA_ENCRYPTION_KEY}
+    ports:
+      - "127.0.0.1:5602:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    mem_limit: 1024m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent http://127.0.0.1:5601/api/status > /dev/null
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  elasticsearch_data:
