@@ -2,6 +2,12 @@
 
 Ứng dụng demo end-to-end cho [DataOps Control Plane](https://github.com/AndyAnh174/dataops-control-plane): Next.js gọi FastAPI qua Caddy, GitHub Actions self-hosted runner kiểm thử, scan image, publish lên GHCR và triển khai lên VPS.
 
+## Live demo
+
+- Ứng dụng: [https://dataops.andyanh.id.vn](https://dataops.andyanh.id.vn)
+- Health check: [https://dataops.andyanh.id.vn/api/health](https://dataops.andyanh.id.vn/api/health)
+- Nginx gateway: [`ops/nginx/dataops.andyanh.id.vn.conf`](ops/nginx/dataops.andyanh.id.vn.conf)
+
 ## Demo chứng minh điều gì?
 
 ```text
