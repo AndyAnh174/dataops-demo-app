@@ -1,0 +1,59 @@
+version: 1
+
+pipeline:
+  stages:
+    - name: backend-quality
+      working_directory: backend
+      run: |
+        uv sync --frozen --group dev
+        uv run pytest -q
+        uv run ruff check .
+        uv run ruff format --check .
+
+    - name: frontend-quality
+      working_directory: frontend
+      run: |
+        export PATH="/opt/actions-runner/externals/node24/bin:${PATH}"
+        npm ci --no-audit --no-fund
+        npm test
+        npm run build
+
+    - name: simulate-failure
+      run: |
+        if [ "${DATAOPS_SIMULATE_FAILURE:-false}" = "true" ]; then
+          echo "Intentional demo failure requested."
+          exit 42
+        fi
+        echo "Controlled failure is disabled."
+
+    - name: build-images
+      run: |
+        docker build --target runtime --tag "${IMAGE_PREFIX}-api:sha-${GITHUB_SHA}" ./backend
+        docker build --target prebuilt-runtime --tag "${IMAGE_PREFIX}-web:sha-${GITHUB_SHA}" ./frontend
+
+    - name: scan-images
+      run: |
+        docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock \
+          --volume /opt/dataops-demo/trivy-cache:/root/.cache/trivy \
+          aquasec/trivy:0.74.0 image --exit-code 1 --severity CRITICAL --ignore-unfixed \
+          "${IMAGE_PREFIX}-api:sha-${GITHUB_SHA}"
+        docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock \
+          --volume /opt/dataops-demo/trivy-cache:/root/.cache/trivy \
+          aquasec/trivy:0.74.0 image --exit-code 1 --severity CRITICAL --ignore-unfixed \
+          "${IMAGE_PREFIX}-web:sha-${GITHUB_SHA}"
+
+    - name: registry-login
+      run: |
+        printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USERNAME}" --password-stdin
+
+    - name: publish-images
+      run: |
+        docker push "${IMAGE_PREFIX}-api:sha-${GITHUB_SHA}"
+        docker push "${IMAGE_PREFIX}-web:sha-${GITHUB_SHA}"
+
+    - name: deploy
+      run: |
+        ./deploy/deploy.sh \
+          "${IMAGE_PREFIX}-web:sha-${GITHUB_SHA}" \
+          "${IMAGE_PREFIX}-api:sha-${GITHUB_SHA}" \
+          "${GITHUB_SHA}"
