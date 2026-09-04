@@ -1,0 +1,175 @@
+name: DataOps Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      recovery_action:
+        description: Approved recovery action
+        required: true
+        type: choice
+        options:
+          - RETRY
+          - QUARANTINE
+          - ROLLBACK_IMAGE
+      incident_id:
+        description: Control Plane incident ID
+        required: true
+        type: string
+      attempt_id:
+        description: Control Plane recovery attempt ID
+        required: true
+        type: string
+      idempotency_key:
+        description: One-time recovery attempt key
+        required: true
+        type: string
+      external_reference:
+        description: Stable provider reference expected by the callback
+        required: true
+        type: string
+      parameters_json:
+        description: Policy-approved recovery parameters
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dataops-recovery-${{ inputs.incident_id }}
+  cancel-in-progress: false
+
+jobs:
+  recover-and-verify:
+    runs-on: [self-hosted, linux, x64, dataops-demo]
+    timeout-minutes: 30
+    env:
+      DATAOPS_URL: http://127.0.0.1:18080
+      PARAMETERS_JSON: ${{ inputs.parameters_json }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate recovery envelope
+        env:
+          RECOVERY_ACTION: ${{ inputs.recovery_action }}
+          INCIDENT_ID: ${{ inputs.incident_id }}
+          ATTEMPT_ID: ${{ inputs.attempt_id }}
+          IDEMPOTENCY_KEY: ${{ inputs.idempotency_key }}
+        run: |
+          set -Eeuo pipefail
+          case "${RECOVERY_ACTION}" in
+            RETRY|QUARANTINE|ROLLBACK_IMAGE) ;;
+            *) echo "Unsupported recovery action" >&2; exit 64 ;;
+          esac
+          [[ "${INCIDENT_ID}" =~ ^[0-9a-f-]{36}$ ]]
+          [[ "${ATTEMPT_ID}" =~ ^[0-9a-f-]{36}$ ]]
+          [[ "${IDEMPOTENCY_KEY}" =~ ^[0-9a-f]{64}$ ]]
+          python3 -c 'import json, os; value=json.loads(os.environ["PARAMETERS_JSON"]); assert isinstance(value, dict)'
+          mkdir -p artifacts
+
+      - name: Retry healthy data pipeline
+        if: inputs.recovery_action == 'RETRY'
+        working-directory: data_pipeline
+        run: |
+          set -Eeuo pipefail
+          uv sync --frozen --group dev
+          uv run python -m dataops_demo_pipeline \
+            --scenario none \
+            --output ../artifacts/recovery-verification.json
+
+      - name: Quarantine invalid rows and revalidate released data
+        if: inputs.recovery_action == 'QUARANTINE'
+        working-directory: data_pipeline
+        run: |
+          set -Eeuo pipefail
+          SCENARIO="$(python3 -c 'import json, os; print(json.loads(os.environ["PARAMETERS_JSON"]).get("scenario", "range"))')"
+          uv sync --frozen --group dev
+          uv run python -m dataops_demo_pipeline.recovery \
+            --scenario "${SCENARIO}" \
+            --output ../artifacts/recovery-verification.json
+
+      - name: Roll back to approved immutable images
+        if: inputs.recovery_action == 'ROLLBACK_IMAGE'
+        run: |
+          set -Eeuo pipefail
+          mapfile -t VALUES < <(python3 -c '
+          import json, os, re
+          value = json.loads(os.environ["PARAMETERS_JSON"])
+          web = value.get("target_web_image", "")
+          api = value.get("target_api_image", "")
+          revision = value.get("revision", "")
+          assert re.fullmatch(r"ghcr\.io/andyanh174/dataops-demo-web:sha-[0-9a-f]{40}", web)
+          assert re.fullmatch(r"ghcr\.io/andyanh174/dataops-demo-api:sha-[0-9a-f]{40}", api)
+          assert re.fullmatch(r"[0-9a-f]{40}", revision)
+          print(web); print(api); print(revision)
+          ')
+          ./deploy/deploy.sh "${VALUES[0]}" "${VALUES[1]}" "${VALUES[2]}"
+          python3 -c '
+          import json, os
+          print(json.dumps({
+              "schema_version": "1.0",
+              "recovery_action": "ROLLBACK_IMAGE",
+              "success": True,
+              "healthcheck": "passed",
+          }))
+          ' > artifacts/recovery-verification.json
+
+      - name: Verify retry result
+        if: inputs.recovery_action == 'RETRY'
+        run: |
+          python3 -c '
+          import json
+          path = "artifacts/recovery-verification.json"
+          report = json.load(open(path, encoding="utf-8"))
+          assert report["success"] is True
+          json.dump({
+              "schema_version": "1.0",
+              "recovery_action": "RETRY",
+              "success": True,
+              "quality_summary": report["summary"],
+          }, open(path, "w", encoding="utf-8"), sort_keys=True)
+          '
+
+      - name: Report verification to Control Plane
+        if: always()
+        env:
+          DATAOPS_TOKEN: ${{ secrets.DATAOPS_TOKEN }}
+          INCIDENT_ID: ${{ inputs.incident_id }}
+          ATTEMPT_ID: ${{ inputs.attempt_id }}
+          IDEMPOTENCY_KEY: ${{ inputs.idempotency_key }}
+          EXTERNAL_REFERENCE: ${{ inputs.external_reference }}
+          RECOVERY_ACTION: ${{ inputs.recovery_action }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -Eeuo pipefail
+          export VERIFICATION_STATUS=FAILED
+          if [[ "${JOB_STATUS}" == "success" ]]; then
+            VERIFICATION_STATUS=PASSED
+          fi
+          export VERIFICATION_STATUS
+          python3 -c '
+          import json, os, pathlib
+          path = pathlib.Path("artifacts/recovery-verification.json")
+          details = (
+              json.loads(path.read_text(encoding="utf-8"))
+              if path.is_file()
+              else {"recovery_action": os.environ["RECOVERY_ACTION"], "success": False}
+          )
+          payload = {
+              "idempotency_key": os.environ["IDEMPOTENCY_KEY"],
+              "status": os.environ["VERIFICATION_STATUS"],
+              "external_reference": os.environ["EXTERNAL_REFERENCE"],
+              "details": details,
+          }
+          pathlib.Path("artifacts/recovery-callback.json").write_text(
+              json.dumps(payload, separators=(",", ":")), encoding="utf-8"
+          )
+          '
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${DATAOPS_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data-binary @artifacts/recovery-callback.json \
+            "${DATAOPS_URL}/api/v1/incidents/${INCIDENT_ID}/recovery-attempts/${ATTEMPT_ID}/verification"

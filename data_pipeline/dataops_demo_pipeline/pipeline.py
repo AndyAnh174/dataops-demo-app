@@ -11,6 +11,7 @@ from great_expectations import expectations as gxe
 CONTRACT = {"name": "customer-orders", "version": "1.0.0"}
 EXPECTED_COLUMNS = ["customer_id", "age", "amount"]
 SUPPORTED_SCENARIOS = {"none", "schema_drift", "null_rate", "duplicate", "range", "volume"}
+QUARANTINE_SCENARIOS = {"null_rate", "duplicate", "range"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +51,10 @@ def build_dataframe(scenario: str) -> pd.DataFrame:
 
 def validate_scenario(scenario: str) -> dict[str, object]:
     dataframe = build_dataframe(scenario)
+    return validate_dataframe(dataframe, scenario=scenario)
+
+
+def validate_dataframe(dataframe: pd.DataFrame, *, scenario: str) -> dict[str, object]:
     context = gx.get_context(mode="ephemeral")
     data_source = context.data_sources.add_pandas(name="dataops-demo-pandas")
     asset = data_source.add_dataframe_asset(name="customer-orders")
@@ -72,6 +77,37 @@ def validate_scenario(scenario: str) -> dict[str, object]:
         },
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
+
+
+def execute_quarantine_recovery(scenario: str, output: Path) -> int:
+    if scenario not in QUARANTINE_SCENARIOS:
+        raise ValueError(f"Quarantine recovery does not support scenario: {scenario}")
+
+    dataframe = build_dataframe(scenario)
+    valid_rows = (
+        dataframe["customer_id"].notna()
+        & ~dataframe["customer_id"].duplicated(keep=False)
+        & dataframe["age"].between(18, 100, inclusive="both")
+        & dataframe["amount"].between(0, 10_000, inclusive="both")
+    )
+    released = dataframe.loc[valid_rows].copy()
+    verification = validate_dataframe(released, scenario=f"quarantine_{scenario}")
+    result = {
+        "schema_version": "1.0",
+        "recovery_action": "QUARANTINE",
+        "source_scenario": scenario,
+        "success": verification["success"],
+        "rows_received": len(dataframe.index),
+        "rows_quarantined": int((~valid_rows).sum()),
+        "rows_released": len(released.index),
+        "quality_summary": verification["summary"],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return 0 if result["success"] else 2
 
 
 def execute_pipeline(scenario: str, output: Path) -> int:
