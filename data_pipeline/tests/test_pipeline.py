@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from dataops_demo_pipeline.pipeline import execute_pipeline, validate_scenario
+from dataops_demo_pipeline import pipeline as pipeline_module
+from dataops_demo_pipeline.pipeline import (
+    execute_pipeline,
+    validate_scenario,
+)
 
 
 def test_healthy_dataset_passes_the_versioned_contract() -> None:
@@ -56,3 +60,33 @@ def test_failed_validation_writes_the_report_before_returning_nonzero(tmp_path) 
 def test_unknown_fault_scenario_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unsupported fault scenario"):
         validate_scenario("mystery")
+
+
+def test_quarantine_recovery_removes_invalid_rows_and_verifies_released_data(
+    tmp_path,
+) -> None:
+    output = tmp_path / "recovery-verification.json"
+
+    exit_code = pipeline_module.execute_quarantine_recovery("range", output)
+
+    assert exit_code == 0
+    verification = json.loads(output.read_text(encoding="utf-8"))
+    assert verification == {
+        "schema_version": "1.0",
+        "recovery_action": "QUARANTINE",
+        "source_scenario": "range",
+        "success": True,
+        "rows_received": 200,
+        "rows_quarantined": 2,
+        "rows_released": 198,
+        "quality_summary": {"checks": 6, "passed": 6, "failed": 0},
+    }
+
+
+@pytest.mark.parametrize("scenario", ["schema_drift", "volume", "none"])
+def test_quarantine_recovery_rejects_non_row_level_scenarios(
+    scenario: str,
+    tmp_path,
+) -> None:
+    with pytest.raises(ValueError, match="does not support"):
+        pipeline_module.execute_quarantine_recovery(scenario, tmp_path / "verification.json")

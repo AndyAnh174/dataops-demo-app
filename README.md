@@ -22,7 +22,10 @@ git push
   -> agent gửi log từng stage và trạng thái SUCCESS / FAILED về Control Plane
 ```
 
-DataOps Control Plane hiện chứng minh phần **chuẩn hóa và lưu trạng thái pipeline đa provider**, idempotency event, audit theo run và thu thập Data Quality report làm evidence có citation. AI Agent/RCA/auto-recovery chưa được triển khai ở giai đoạn này; workflow không giả vờ rằng phần đó đã tồn tại.
+DataOps Control Plane hiện có thêm luồng recovery M6: RCA đã xác thực được Policy Engine
+chuyển thành recovery plan, operator duyệt, Control Plane dispatch workflow
+[`DataOps Recovery`](.github/workflows/dataops-recovery.yml), và incident chỉ được đóng sau
+callback verification hợp lệ. Mọi bước plan, approval, dispatch và verification đều có audit trail.
 
 Workflow chỉ cần checkout rồi gọi
 [`AndyAnh174/dataops-agent@v0`](https://github.com/AndyAnh174/dataops-agent). Toàn bộ
@@ -71,6 +74,19 @@ Vào tab **Actions**, chọn workflow **CI/CD with DataOps telemetry** rồi **R
 - `volume`: giảm số dòng xuống dưới ngưỡng tối thiểu.
 
 Với một fault scenario, stage `data-quality` vẫn ghi report trước khi thoát mã `2`. DataOps Agent upload report, gửi stage log và trạng thái `FAILED`; các stage publish/deploy phía sau không chạy. Chạy lại với `none` để thấy luồng thành công.
+
+## Recovery M6
+
+Workflow recovery không được gọi trực tiếp trong demo bình thường. Control Plane gọi nó bằng
+GitHub API sau khi recovery plan đã được duyệt và truyền một idempotency key duy nhất.
+
+- `RETRY`: chạy lại data pipeline với dataset lành mạnh rồi kiểm tra data contract.
+- `QUARANTINE`: loại các dòng vi phạm null/duplicate/range, kiểm tra lại phần dữ liệu được phát hành và báo số dòng đã cách ly.
+- `ROLLBACK_IMAGE`: chỉ nhận bộ image immutable dạng `sha-<40 hex>`, triển khai lại bằng script có rollback sẵn rồi health check.
+
+Workflow callback `PASSED` hoặc `FAILED` về Control Plane. Dispatch thành công chưa đủ để đánh dấu
+incident là `RESOLVED`; chỉ callback `PASSED` khớp attempt, external reference và idempotency key mới
+được phép đóng incident.
 
 ## Network và rollback
 
