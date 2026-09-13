@@ -27,7 +27,6 @@ pipeline:
     - name: frontend-quality
       working_directory: frontend
       run: |
-        export PATH="/opt/actions-runner/externals/node24/bin:${PATH}"
         npm ci --no-audit --no-fund
         npm test
         npm run build
